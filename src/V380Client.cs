@@ -369,7 +369,7 @@ namespace V380Decoder.src
                         if (curFrame == 0) { videoFrags.Clear(); videoTotal = totalFrame; }
                         if (totalFrame != videoTotal) { videoFrags.Clear(); videoTotal = totalFrame; }
 
-                        for (int i = 0; i < payLen; i++) videoFrags.Add(payloadBuf[i]);
+                        videoFrags.AddRange(payloadBuf.AsSpan(0, payLen));
 
                         if (curFrame != totalFrame - 1) continue;
                         if (videoFrags.Count < 16) { videoFrags.Clear(); continue; }
@@ -454,7 +454,7 @@ namespace V380Decoder.src
                         if (curFrame == 0) { audioFrags.Clear(); audioTotal = totalFrame; }
                         if (totalFrame != audioTotal) { audioFrags.Clear(); audioTotal = totalFrame; }
 
-                        for (int i = 0; i < payLen; i++) audioFrags.Add(payloadBuf[i]);
+                        audioFrags.AddRange(payloadBuf.AsSpan(0, payLen));
 
                         if (curFrame != totalFrame - 1) continue;
                         if (audioFrags.Count < 16) { audioFrags.Clear(); continue; }
