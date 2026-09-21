@@ -151,11 +151,12 @@ namespace V380Decoder.src
                 case "SETUP":
                     {
                         bool isAudio = url.Contains("trackID=1");
-                        // Parse interleaved channels from client Transport header
-                        // e.g. Transport: RTP/AVP/TCP;unicast;interleaved=0-1
                         byte ch = (byte)(isAudio ? 2 : 0);
                         var m = System.Text.RegularExpressions.Regex.Match(transport, @"interleaved=(\d+)-(\d+)");
                         if (m.Success) ch = byte.Parse(m.Groups[1].Value);
+
+                        if (isAudio) audioCh = ch;
+                        else videoCh = ch;
 
                         Reply(cseq,
                             $"Transport: RTP/AVP/TCP;unicast;interleaved={ch}-{ch + 1}",
