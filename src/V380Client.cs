@@ -609,21 +609,23 @@ namespace V380Decoder.src
 
         byte[] ReceiveData(NetworkStream s, int max)
         {
-            var buf = new byte[max]; int tot = 0;
-            var deadline = DateTime.Now.AddSeconds(5);
-            while (DateTime.Now < deadline)
+            var buf = new byte[max];
+            int tot = 0;
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline && tot < max)
             {
                 if (s.DataAvailable || tot > 0)
                 {
                     int n = s.Read(buf, tot, max - tot);
                     if (n <= 0) break;
                     tot += n;
-                    if (tot >= 16) break;
                 }
                 else Thread.Sleep(10);
             }
             if (tot == 0) return null;
-            var r = new byte[tot]; Array.Copy(buf, r, tot); return r;
+            var r = new byte[tot];
+            Array.Copy(buf, r, tot);
+            return r;
         }
 
         int ReadExact(NetworkStream s, byte[] buf, int off, int cnt)
