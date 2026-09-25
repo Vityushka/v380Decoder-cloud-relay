@@ -1,0 +1,30 @@
+services:
+  v380-cloud-relay:
+    container_name: v380-cloud-relay
+    image: v380decoder:cloud-relay-v30
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:8081:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:8554:8554"
+    command:
+      - --id
+      - "${V380_ID:?Set V380_ID in .env}"
+      - --username
+      - "${V380_USERNAME:-admin}"
+      - --password
+      - "${V380_PASSWORD:?Set V380_PASSWORD in .env}"
+      - --source
+      - cloud
+      - --ip
+      - "${V380_RELAY_IP:-}"
+      - --output
+      - rtsp
+      - --secure
+      - --enable-api
+      - --enable-mjpeg
+      - --http-port
+      - "8080"
+      - --rtsp-port
+      - "8554"

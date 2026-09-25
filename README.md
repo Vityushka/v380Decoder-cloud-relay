@@ -91,6 +91,52 @@ Streaming via relay server (relay IP automatically detected):
 ./V380Decoder --id 12345678 --username admin --password password --source cloud
 ```
 
+## Docker Compose: cloud relay
+
+This repository includes a Compose setup for a camera located behind another
+network. It uses automatic relay discovery and the V30 cloud login protocol.
+
+```bash
+cp .env.example .env
+# Edit .env and set V380_ID, V380_USERNAME, and V380_PASSWORD.
+docker compose up -d --build
+docker compose logs -f
+```
+
+By default the services listen only on the Docker host:
+
+- Web UI and MJPEG: `http://127.0.0.1:8081`
+- Snapshot: `http://127.0.0.1:8081/snapshot`
+- RTSP: `rtsp://127.0.0.1:8554/live`
+
+The Compose service enables authentication. Use the same username and password
+as the camera. The real `.env` is ignored by both Git and Docker builds.
+
+### Deploy on a Linux server
+
+1. Install Docker Engine and the Docker Compose plugin.
+2. Clone this repository and enter its directory.
+3. Copy `.env.example` to `.env` and fill in the camera credentials.
+4. Start the service with `docker compose up -d --build`.
+5. Check it with `docker compose ps` and `docker compose logs --tail=100`.
+
+To make the ports reachable outside the server, set this in `.env`:
+
+```dotenv
+BIND_ADDRESS=0.0.0.0
+```
+
+Allow TCP ports `8081` and `8554` only from trusted addresses or through a VPN.
+Do not publish them broadly to the internet. If a fixed relay is ever required,
+set `V380_RELAY_IP`; otherwise leave it empty for automatic discovery.
+
+To update later:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
 ## ONVIF Support
 
 Tested with [Onvif Device Manager](https://sourceforge.net/projects/onvifdm/) (ODM), [Onvif Integration](https://www.home-assistant.io/integrations/onvif/) Home Assistant and [Shinobi](https://shinobi.video/)

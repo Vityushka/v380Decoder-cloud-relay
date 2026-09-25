@@ -40,13 +40,12 @@ namespace V380Decoder.src
 
         public void Start()
         {
-            string basicAuth = secure ? $"{username}:{password}@" : string.Empty;
             listener = new TcpListener(IPAddress.Any, port);
             listener.Start(10);
             running = true;
             acceptThread = new Thread(AcceptLoop) { IsBackground = true, Name = "rtsp-accept" };
             acceptThread.Start();
-            Console.Error.WriteLine($"[RTSP] rtsp://{basicAuth}{NetworkHelper.GetLocalIPAddress()}:{port}/live");
+            Console.Error.WriteLine($"[RTSP] rtsp://{NetworkHelper.GetLocalIPAddress()}:{port}/live{(secure ? " (authentication enabled)" : string.Empty)}");
         }
 
         void AcceptLoop()

@@ -46,7 +46,6 @@ namespace V380Decoder.src
         public void Start()
         {
             string ipAddress = NetworkHelper.GetLocalIPAddress();
-            string basicAuth = string.Empty;
             var builder = WebApplication.CreateBuilder();
             builder.WebHost.UseUrls($"http://*:{httpPort}");
 
@@ -61,7 +60,6 @@ namespace V380Decoder.src
             RouteGroupBuilder api = app.MapGroup("/");
             if (secure)
             {
-                basicAuth = $"{username}:{password}@";
                 api.AddEndpointFilter(async (context, next) =>
                 {
                     var http = context.HttpContext;
@@ -98,7 +96,7 @@ namespace V380Decoder.src
                 });
             }
 
-            Console.Error.WriteLine($"[SNAPSHOT] http://{basicAuth}{ipAddress}:{httpPort}/snapshot");
+            Console.Error.WriteLine($"[SNAPSHOT] http://{ipAddress}:{httpPort}/snapshot{(secure ? " (authentication enabled)" : string.Empty)}");
             api.MapGet("/snapshot", async (HttpContext ctx) =>
             {
                 var jpeg = await client.snapshotManager.GetSnapshotAsync(timeoutMs: 5000);
@@ -112,7 +110,7 @@ namespace V380Decoder.src
 
             if (enableMjpeg)
             {
-                Console.Error.WriteLine($"[MJPEG] http://{basicAuth}{ipAddress}:{httpPort}/mjpeg");
+                Console.Error.WriteLine($"[MJPEG] http://{ipAddress}:{httpPort}/mjpeg{(secure ? " (authentication enabled)" : string.Empty)}");
                 api.MapGet("/mjpeg", async (HttpContext ctx, CancellationToken ct) =>
                 {
                     const string boundary = "mjpegframe";
@@ -146,8 +144,8 @@ namespace V380Decoder.src
 
             if (enableApi)
             {
-                Console.Error.WriteLine($"[WEB] http://{basicAuth}{ipAddress}:{httpPort}");
-                Console.Error.WriteLine($"[API] http://{basicAuth}{ipAddress}:{httpPort}/api/");
+                Console.Error.WriteLine($"[WEB] http://{ipAddress}:{httpPort}{(secure ? " (authentication enabled)" : string.Empty)}");
+                Console.Error.WriteLine($"[API] http://{ipAddress}:{httpPort}/api/{(secure ? " (authentication enabled)" : string.Empty)}");
 
                 api.MapGet("/", () => Results.Content(WebPage.GetHtml(enableMjpeg), "text/html"));
 

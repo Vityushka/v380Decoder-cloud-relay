@@ -1,14 +1,15 @@
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace V380Decoder.src
 {
     public class V380Client : IDisposable
     {
         public SnapshotManager snapshotManager { get; private set; }
-        private TcpClient authClient, streamClient;
-        private NetworkStream authStream, streamStream;
+        private TcpClient authClient, streamClient, controlClient;
+        private NetworkStream authStream, streamStream, controlStream;
         private readonly string ip;
         private readonly int port;
         private readonly uint deviceId;
@@ -63,6 +64,13 @@ namespace V380Decoder.src
                         continue;
                     }
 
+                    if (source == SourceStream.Cloud && !ControlLogin())
+                    {
+                        Console.Error.WriteLine("[CONTROL] Retrying...");
+                        streamStream?.Close(); streamClient?.Close();
+                        continue;
+                    }
+
                     ReceiveFrames(mode, rtsp, ct);
                 }
                 catch (OperationCanceledException)
@@ -79,6 +87,7 @@ namespace V380Decoder.src
                 finally
                 {
                     Console.Error.WriteLine("[STREAM] Closing connection...");
+                    controlStream?.Close(); controlClient?.Close();
                     streamStream?.Close(); streamClient?.Close();
                 }
             }
@@ -86,6 +95,11 @@ namespace V380Decoder.src
 
         public int GetAuthTicket()
         {
+            if (source == SourceStream.Cloud)
+            {
+                return GetCloudAuthTicketV30();
+            }
+
             try
             {
                 authClient = new TcpClient();
@@ -201,6 +215,109 @@ namespace V380Decoder.src
             }
         }
 
+        private int GetCloudAuthTicketV30()
+        {
+            const int cloudLoginPort = 8089;
+            try
+            {
+                authClient = new TcpClient { NoDelay = true };
+                var connect = authClient.BeginConnect(ip, cloudLoginPort, null, null);
+                if (!connect.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(5)))
+                {
+                    Console.Error.WriteLine("[AUTH] failed connecting to cloud login socket. retrying...");
+                    return 0;
+                }
+                authClient.EndConnect(connect);
+                authStream = authClient.GetStream();
+
+                var randomKey = GenerateRandomKey();
+                var encryptedPassword = EncryptCloudPassword(password, randomKey);
+                var requestId = RandomNumberGenerator.GetInt32(100, 100000099);
+                var request = new
+                {
+                    id = requestId,
+                    method = "login",
+                    @params = new
+                    {
+                        version = 31,
+                        phoneType = 1012,
+                        deviceId,
+                        domain = $"{deviceId}.nvdvr.net",
+                        port,
+                        accountId = 11,
+                        username,
+                        password = encryptedPassword,
+                        randomKey,
+                        connectType = 0,
+                        securityLevel = 1,
+                        agora = 0,
+                        ectx = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+                        p2pIdx = 0
+                    }
+                };
+
+                byte[] json = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request));
+                byte[] packet = new byte[8 + json.Length];
+                WriteUInt32LE(packet, 0, unchecked((uint)-33553664));
+                WriteUInt32LE(packet, 4, (uint)json.Length);
+                Array.Copy(json, 0, packet, 8, json.Length);
+                if (!SendData(authStream, packet))
+                {
+                    Console.Error.WriteLine("[AUTH] failed sending cloud login request. retrying...");
+                    return 0;
+                }
+
+                byte[] header = ReceiveData(authStream, 8);
+                if (header == null || header.Length != 8)
+                {
+                    Console.Error.WriteLine("[AUTH] failed receiving cloud login header. retrying...");
+                    return 0;
+                }
+                int responseLength = checked((int)ReadUInt32LE(header, 4));
+                if (responseLength <= 0 || responseLength > 65536)
+                {
+                    Console.Error.WriteLine($"[AUTH] invalid cloud login response size: {responseLength}");
+                    return 0;
+                }
+                byte[] response = ReceiveData(authStream, responseLength);
+                if (response == null || response.Length != responseLength)
+                {
+                    Console.Error.WriteLine("[AUTH] incomplete cloud login response. retrying...");
+                    return 0;
+                }
+
+                using JsonDocument document = JsonDocument.Parse(response);
+                JsonElement root = document.RootElement;
+                if (root.GetProperty("id").GetInt32() != requestId)
+                {
+                    Console.Error.WriteLine("[AUTH] cloud login response id mismatch. retrying...");
+                    return 0;
+                }
+                int loginResult = root.GetProperty("result").GetProperty("code").GetInt32();
+                if (loginResult != 1001)
+                {
+                    Console.Error.WriteLine($"[AUTH] cloud login failed result={loginResult}");
+                    return loginResult is 1011 or 1012 or 1018 ? -1 : 0;
+                }
+
+                JsonElement v380 = root.GetProperty("v380");
+                deviceVersion = checked((ushort)v380.GetProperty("version").GetInt32());
+                authTicket = v380.GetProperty("handle").GetUInt32();
+                sessionId = v380.GetProperty("session").GetUInt32();
+                Console.Error.WriteLine($"[AUTH] cloud V30 success ticket={authTicket} deviceVersion={deviceVersion}");
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[AUTH] cloud V30 error: {ex.Message}");
+                return 0;
+            }
+            finally
+            {
+                authStream?.Close(); authClient?.Close();
+            }
+        }
+
 
         public bool StreamLogin()
         {
@@ -233,16 +350,16 @@ namespace V380Decoder.src
             }
             else
             {
-                WriteUInt32LE(cmd301, 4, 1022); //unknown1 
+                WriteUInt32LE(cmd301, 4, 1002); // cloud client mode used by V380 Pro
                 var hostnameBytes = Encoding.ASCII.GetBytes($"{deviceId}.nvdvr.net");
                 Array.Copy(hostnameBytes, 0, cmd301, 8, Math.Min(hostnameBytes.Length, 50)); //hostname
                 WriteUInt32LE(cmd301, 58, (uint)port); //port
                 WriteUInt32LE(cmd301, 62, deviceId); //device id
                 WriteUInt32LE(cmd301, 66, authTicket); // auth ticket
                 WriteUInt32LE(cmd301, 70, sessionId); // session id
-                WriteUInt32LE(cmd301, 74, 1); //quality 0=SD, 1=HD
+                WriteUInt32LE(cmd301, 74, 0); //quality 0=SD, 1=HD
                 cmd301[78] = 20; //unknown2 
-                WriteUInt32LE(cmd301, 79, 1); //unknown23
+                WriteUInt32LE(cmd301, 79, 4096); //audio 4096=off, 4097=on
             }
 
             if (!SendData(streamStream, cmd301))
@@ -251,7 +368,8 @@ namespace V380Decoder.src
                 return false;
             }
 
-            var resp401 = ReceiveData(streamStream, 412);
+            int loginResponseSize = source == SourceStream.Cloud ? 32 : 412;
+            var resp401 = ReceiveData(streamStream, loginResponseSize);
 
             if (resp401 == null || resp401.Length < 8)
             {
@@ -301,6 +419,62 @@ namespace V380Decoder.src
             return true;
         }
 
+        public bool ControlLogin()
+        {
+            try
+            {
+                controlStream?.Close(); controlClient?.Close();
+                controlClient = new TcpClient { NoDelay = true };
+                var r = controlClient.BeginConnect(ip, port, null, null);
+                if (!r.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(5)))
+                {
+                    Console.Error.WriteLine("[CONTROL] failed connecting to socket");
+                    return false;
+                }
+                controlClient.EndConnect(r);
+                controlStream = controlClient.GetStream();
+
+                var cmd377 = new byte[256];
+                WriteUInt32LE(cmd377, 0, 377);
+                WriteUInt32LE(cmd377, 4, 1002);
+                var hostnameBytes = Encoding.ASCII.GetBytes($"{deviceId}.nvdvr.net");
+                Array.Copy(hostnameBytes, 0, cmd377, 8, Math.Min(hostnameBytes.Length, 50));
+                WriteUInt32LE(cmd377, 58, (uint)port);
+                WriteUInt32LE(cmd377, 62, deviceId);
+                WriteUInt32LE(cmd377, 66, authTicket);
+                WriteUInt32LE(cmd377, 70, sessionId);
+
+                if (!SendData(controlStream, cmd377))
+                {
+                    Console.Error.WriteLine("[CONTROL] login failed send request");
+                    return false;
+                }
+
+                var resp477 = ReceiveData(controlStream, 256);
+                if (resp477 == null || resp477.Length < 8)
+                {
+                    Console.Error.WriteLine("[CONTROL] login failed receive response");
+                    return false;
+                }
+
+                uint respCmd = ReadUInt32LE(resp477, 0);
+                uint result = ReadUInt32LE(resp477, 4);
+                if (respCmd != 477 || result != 1000)
+                {
+                    Console.Error.WriteLine($"[CONTROL] login failed cmd={respCmd} result={result}");
+                    return false;
+                }
+
+                Console.Error.WriteLine("[CONTROL] login OK");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[CONTROL] Error: {ex.Message}");
+                return false;
+            }
+        }
+
         public bool StartStream()
         {
             Console.Error.WriteLine($"[STREAM] starting stream...");
@@ -335,9 +509,11 @@ namespace V380Decoder.src
                     if (needReconnect)
                     {
                         Console.Error.WriteLine($"[STREAM] lost, reconnecting... ");
+                        try { controlStream?.Close(); controlClient?.Close(); } catch { }
                         try { streamStream?.Close(); streamClient?.Close(); } catch { }
                         if (!StreamLogin()) break;
                         if (!StartStream()) break;
+                        if (source == SourceStream.Cloud && !ControlLogin()) break;
                         needReconnect = false;
                     }
 
@@ -499,7 +675,7 @@ namespace V380Decoder.src
                             rtsp?.PushAudio(fd);
                         }
                     }
-                    else if (type == 0x5B)
+                    else if (type == 0x18 || type == 0x5B)
                     {
                         continue;
                     }
@@ -599,6 +775,36 @@ namespace V380Decoder.src
             Array.Copy(rk, 0, out_, 0, 16);
             Array.Copy(pad, 0, out_, 16, 48);
             return out_;
+        }
+
+        private static string GenerateRandomKey()
+        {
+            const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+            var result = new char[16];
+            for (int i = 0; i < result.Length; i++)
+            {
+                result[i] = chars[RandomNumberGenerator.GetInt32(chars.Length)];
+            }
+            return new string(result);
+        }
+
+        private static string EncryptCloudPassword(string value, string randomKey)
+        {
+            byte[] first = EncryptAesPkcs7(
+                Encoding.UTF8.GetBytes(value),
+                Encoding.ASCII.GetBytes("macrovideo+*#!^@"));
+            byte[] second = EncryptAesPkcs7(first, Encoding.ASCII.GetBytes(randomKey));
+            return Convert.ToBase64String(second);
+        }
+
+        private static byte[] EncryptAesPkcs7(byte[] value, byte[] key)
+        {
+            using var aes = Aes.Create();
+            aes.Key = key;
+            aes.Mode = CipherMode.ECB;
+            aes.Padding = PaddingMode.PKCS7;
+            using ICryptoTransform encryptor = aes.CreateEncryptor();
+            return encryptor.TransformFinalBlock(value, 0, value.Length);
         }
 
         bool SendData(NetworkStream s, byte[] d)
@@ -708,6 +914,7 @@ namespace V380Decoder.src
         public void Dispose()
         {
             authStream?.Close(); authClient?.Close();
+            controlStream?.Close(); controlClient?.Close();
             streamStream?.Close(); streamClient?.Close();
             snapshotManager?.Dispose();
         }

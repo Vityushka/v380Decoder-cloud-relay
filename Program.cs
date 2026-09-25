@@ -70,7 +70,7 @@ if (args.Length > 0)
     string relayIp = string.Empty;
     if (sourceStream == SourceStream.Cloud)
     {
-        relayIp = await DispatchRelayServer.GetServerIPAsync(id);
+        relayIp = string.IsNullOrWhiteSpace(ip) ? await DispatchRelayServer.GetServerIPAsync(id) : ip;
         if (string.IsNullOrEmpty(relayIp))
         {
             Console.Error.WriteLine("[V380] failed to get relay server");

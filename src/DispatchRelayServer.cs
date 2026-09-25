@@ -16,7 +16,7 @@ namespace V380Decoder.src
         public static async Task<string> GetServerIPAsync(int deviceId)
         {
             long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            int platform = 10001; // 20001 pano device
+            int platform = 10001; // direct MR relay list (ports 8089/8800)
             string baseString = $"dev_id={deviceId}&platform={platform}&timestamp={timestamp}hsdata2022";
             string sign = ComputeSha1Hash(baseString);
 
